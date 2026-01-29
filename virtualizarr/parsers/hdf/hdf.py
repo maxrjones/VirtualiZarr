@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -124,16 +125,18 @@ def _construct_manifest_group(
             if key not in drop_variables
             if isinstance(dataset := g[key], h5py.Dataset)
         }
-        groups = {
-            key: _construct_manifest_group(
-                filepath,
-                reader,
-                group=str(Path(group) / key) if group is not None else key,
-            )
-            for key in g.keys()
-            if key not in drop_variables
-            if isinstance(g[key], h5py.Group)
-        }
+        groups = {}
+        for key in g.keys():
+            if key in drop_variables or not isinstance(g[key], h5py.Group):
+                continue
+            try:
+                groups[key] = _construct_manifest_group(
+                    filepath,
+                    reader,
+                    group=str(Path(group) / key) if group is not None else key,
+                )
+            except:
+                warnings.warn(f"Unable to virtualize group: {str(Path(group) / key)}")
         attributes = _extract_attrs(g)
 
     return ManifestGroup(arrays=arrays, groups=groups, attributes=attributes)
