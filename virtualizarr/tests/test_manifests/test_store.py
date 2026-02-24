@@ -81,7 +81,11 @@ def test_parse_manifest_index_raises(val):
 
 
 def _generate_manifest_store(
-    store: ObjectStore, *, prefix: str, filepath: str
+    store: ObjectStore,
+    *,
+    prefix: str,
+    filepath: str,
+    chunk_key_encoding: dict | None = None,
 ) -> ManifestStore:
     """
     Generate a ManifestStore for testing.
@@ -106,6 +110,9 @@ def _generate_manifest_store(
     """
     import obstore as obs
 
+    if chunk_key_encoding is None:
+        chunk_key_encoding = {"name": "default", "separator": "."}
+
     obs.put(
         store,
         filepath,
@@ -124,7 +131,7 @@ def _generate_manifest_store(
         chunk_shape=(2, 2),
         data_type=np.dtype("int32"),
         codecs=codecs,
-        chunk_key_encoding={"name": "default", "separator": "."},
+        chunk_key_encoding=chunk_key_encoding,
         fill_value=0,
     )
     manifest_array = ManifestArray(metadata=array_metadata, chunkmanifest=manifest)
@@ -138,7 +145,7 @@ def _generate_manifest_store(
         chunk_shape=(),
         data_type=np.dtype("int32"),
         codecs=codecs,
-        chunk_key_encoding={"name": "default", "separator": "."},
+        chunk_key_encoding=chunk_key_encoding,
         fill_value=0,
     )
     scalar_manifest_array = ManifestArray(
@@ -168,6 +175,22 @@ def local_store(tmpdir):
         store=store,
         prefix=prefix,
         filepath=filepath,
+    )
+
+
+@pytest.fixture()
+def local_store_default_separator(tmpdir):
+    """Store using the default chunk_key_encoding (separator '/')."""
+    import obstore as obs
+
+    store = obs.store.LocalStore()
+    filepath = f"{tmpdir}/data.tmp"
+    prefix = "file://"
+    return _generate_manifest_store(
+        store=store,
+        prefix=prefix,
+        filepath=filepath,
+        chunk_key_encoding={"name": "default"},
     )
 
 
