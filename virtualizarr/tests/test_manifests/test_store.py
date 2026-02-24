@@ -435,6 +435,56 @@ class TestManifestStore:
         assert observed == ()
 
     @pytest.mark.asyncio
+    async def test_list_default_separator(self, local_store_default_separator) -> None:
+        """Test that list() uses '/' separator when chunk_key_encoding is 'default'."""
+        store = local_store_default_separator
+        observed = sorted(await _collect_aiterator(store.list()))
+        expected = sorted(
+            [
+                "zarr.json",
+                "foo/zarr.json",
+                "foo/c/0/0",
+                "foo/c/0/1",
+                "foo/c/1/0",
+                "foo/c/1/1",
+                "bar/zarr.json",
+                "bar/c/0/0",
+                "bar/c/0/1",
+                "bar/c/1/0",
+                "bar/c/1/1",
+                "scalar/zarr.json",
+                "scalar/c",
+                "subgroup/zarr.json",
+                "subgroup/foo/zarr.json",
+                "subgroup/foo/c/0/0",
+                "subgroup/foo/c/0/1",
+                "subgroup/foo/c/1/0",
+                "subgroup/foo/c/1/1",
+            ]
+        )
+        assert observed == expected
+
+    @pytest.mark.asyncio
+    async def test_list_dir_default_separator(
+        self, local_store_default_separator
+    ) -> None:
+        """Test that list_dir() uses '/' separator when chunk_key_encoding is 'default'."""
+        store = local_store_default_separator
+        observed = await _collect_aiterator(store.list_dir("foo/"))
+        assert observed == ("zarr.json", "c/0/0", "c/0/1", "c/1/0", "c/1/1")
+
+    @pytest.mark.asyncio
+    async def test_get_data_default_separator(
+        self, local_store_default_separator
+    ) -> None:
+        """Test that keys from list() round-trip through get() with '/' separator."""
+        store = local_store_default_separator
+        observed = await store.get("foo/c/0/0", prototype=default_buffer_prototype())
+        assert observed.to_bytes() == b"\x01\x02\x03\x04"
+        observed = await store.get("foo/c/1/0", prototype=default_buffer_prototype())
+        assert observed.to_bytes() == b"\x09\x10\x11\x12"
+
+    @pytest.mark.asyncio
     async def test_store_raises(self, local_store) -> None:
         with pytest.raises(NotImplementedError):
             await local_store.set("foo/zarr.json", 1)
