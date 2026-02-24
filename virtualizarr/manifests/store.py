@@ -275,8 +275,15 @@ class ManifestStore(Store):
                 if member.shape == ():
                     yield f"{member_prefix}c"
                 else:
+                    separator: str = getattr(
+                        member.metadata.chunk_key_encoding, "separator", "."
+                    )
                     for chunk_key in member.manifest.keys():
-                        yield f"{member_prefix}c.{chunk_key}"
+                        # ChunkManifest.keys() always uses "." separator;
+                        # convert to the array's actual chunk_key_encoding
+                        if separator != ".":
+                            chunk_key = chunk_key.replace(".", separator)
+                        yield f"{member_prefix}c{separator}{chunk_key}"
 
     async def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         # docstring inherited
@@ -292,15 +299,6 @@ class ManifestStore(Store):
             yield "zarr.json"
             for member_name in node._members.keys():
                 yield member_name
-        # TODO: Support listing when using other chunk_key_encodings
-        elif (
-            separator := getattr(node.metadata.chunk_key_encoding, "separator", None)
-            != "."
-        ):
-            raise NotImplementedError(
-                f"Array listing only supports '.' as chunk key separator, "
-                f"got {separator!r}"
-            )
         else:
             # Arrays contain a metadata document and chunks
             yield "zarr.json"
@@ -308,9 +306,13 @@ class ManifestStore(Store):
                 # Scalar arrays have a single chunk named 'c'
                 yield "c"
             else:
-                # Multi-dimensional arrays have chunks named 'c.{key}'
+                separator = getattr(node.metadata.chunk_key_encoding, "separator", ".")
                 for chunk_key in node.manifest.keys():
-                    yield f"c.{chunk_key}"
+                    # ChunkManifest.keys() always uses "." separator;
+                    # convert to the array's actual chunk_key_encoding
+                    if separator != ".":
+                        chunk_key = chunk_key.replace(".", separator)
+                    yield f"c{separator}{chunk_key}"
 
     @property
     def supports_consolidated_metadata(self) -> bool:
