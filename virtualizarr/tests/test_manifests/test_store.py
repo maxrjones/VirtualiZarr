@@ -343,6 +343,75 @@ class TestManifestStore:
         assert observed == ("zarr.json", "c.0.0", "c.0.1", "c.1.0", "c.1.1")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "manifest_store",
+        ["local_store", pytest.param("s3_store", marks=requires_minio)],
+    )
+    async def test_list(self, manifest_store, request) -> None:
+        store = request.getfixturevalue(manifest_store)
+        observed = sorted(await _collect_aiterator(store.list()))
+        expected = sorted(
+            [
+                "zarr.json",
+                "foo/zarr.json",
+                "foo/c.0.0",
+                "foo/c.0.1",
+                "foo/c.1.0",
+                "foo/c.1.1",
+                "bar/zarr.json",
+                "bar/c.0.0",
+                "bar/c.0.1",
+                "bar/c.1.0",
+                "bar/c.1.1",
+                "scalar/zarr.json",
+                "scalar/c",
+                "subgroup/zarr.json",
+                "subgroup/foo/zarr.json",
+                "subgroup/foo/c.0.0",
+                "subgroup/foo/c.0.1",
+                "subgroup/foo/c.1.0",
+                "subgroup/foo/c.1.1",
+            ]
+        )
+        assert observed == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "manifest_store",
+        ["local_store", pytest.param("s3_store", marks=requires_minio)],
+    )
+    async def test_list_prefix(self, manifest_store, request) -> None:
+        store = request.getfixturevalue(manifest_store)
+        # List keys under "foo/"
+        observed = sorted(await _collect_aiterator(store.list_prefix("foo/")))
+        expected = sorted(
+            [
+                "foo/zarr.json",
+                "foo/c.0.0",
+                "foo/c.0.1",
+                "foo/c.1.0",
+                "foo/c.1.1",
+            ]
+        )
+        assert observed == expected
+        # List keys under "subgroup/"
+        observed = sorted(await _collect_aiterator(store.list_prefix("subgroup/")))
+        expected = sorted(
+            [
+                "subgroup/zarr.json",
+                "subgroup/foo/zarr.json",
+                "subgroup/foo/c.0.0",
+                "subgroup/foo/c.0.1",
+                "subgroup/foo/c.1.0",
+                "subgroup/foo/c.1.1",
+            ]
+        )
+        assert observed == expected
+        # Prefix matching no keys
+        observed = await _collect_aiterator(store.list_prefix("nonexistent/"))
+        assert observed == ()
+
+    @pytest.mark.asyncio
     async def test_store_raises(self, local_store) -> None:
         with pytest.raises(NotImplementedError):
             await local_store.set("foo/zarr.json", 1)

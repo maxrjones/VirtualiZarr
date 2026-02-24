@@ -248,13 +248,35 @@ class ManifestStore(Store):
         # docstring inherited
         return True
 
-    def list(self) -> AsyncGenerator[str, None]:
+    async def list(self) -> AsyncGenerator[str, None]:
         # docstring inherited
-        raise NotImplementedError
+        async for key in self._list_node(self._group, ""):
+            yield key
 
-    def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
+    async def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
         # docstring inherited
-        raise NotImplementedError
+        async for key in self.list():
+            if key.startswith(prefix):
+                yield key
+
+    async def _list_node(
+        self, node: ManifestGroup, prefix: str
+    ) -> AsyncGenerator[str, None]:
+        """Recursively list all keys under a group node."""
+        yield f"{prefix}zarr.json"
+        for name, member in node._members.items():
+            member_prefix = f"{prefix}{name}/"
+            if isinstance(member, ManifestGroup):
+                async for key in self._list_node(member, member_prefix):
+                    yield key
+            else:
+                # ManifestArray
+                yield f"{member_prefix}zarr.json"
+                if member.shape == ():
+                    yield f"{member_prefix}c"
+                else:
+                    for chunk_key in member.manifest.keys():
+                        yield f"{member_prefix}c.{chunk_key}"
 
     async def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         # docstring inherited
