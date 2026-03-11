@@ -490,8 +490,7 @@ class DMRParser:
         for attr_tag in var_tag.iterfind("dap:Attribute", self._NS):
             attrs.update(self._parse_attribute(attr_tag))
         if "_FillValue" in attrs:
-            encoded_cf_fill_value = encode_cf_fill_value(attrs["_FillValue"], dtype)
-            attrs["_FillValue"] = encoded_cf_fill_value
+            attrs["_FillValue"] = encode_cf_fill_value(attrs["_FillValue"], dtype)
 
         metadata = create_v3_array_metadata(
             shape=shape,

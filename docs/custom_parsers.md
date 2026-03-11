@@ -216,6 +216,21 @@ You can therefore use a function which returns in-memory kerchunk JSON reference
 
     Nevertheless this approach is used by VirtualiZarr internally, at least for the FITS, netCDF3, and the (since-deprecated-and-removed original implementation of the) HDF5 file format parsers.
 
+## Fill values
+
+There are two distinct "fill value" concepts that parsers may interact with:
+
+1. Value for uninitialized chunks - (e.g., **Zarr `fill_value`**) — the default value returned for uninitialized or missing chunks. This is set via the `fill_value` parameter when creating `ArrayV3Metadata`.
+2. Sentinel value - (e.g., **CF `_FillValue`** )) — a sentinel value that CF-aware readers like xarray use to mask individual data points as missing within chunks that _do_ contain data.
+
+These serve different purposes and are stored in different places. Many source formats interact with these distinct concepts. For example, HDF5 has a storage-level `fillvalue` (returned for unallocated chunks) and a CF `_FillValue` attribute (used for masking). Parsers should preserve this separation faithfully: the source format's storage fill value maps to the zarr `fill_value`, and the CF `_FillValue` attribute is carried through as a zarr attribute.
+
+### Encoding the `_FillValue` attribute
+
+In order to be currently parsed by Xarray, the `_FillValue` attribute must be encoded in a way that xarray's `FillValueCoder.decode()` expects. You could use `FillValueCoder.encode()` to accomplish this. The internal parsers use a custom function in order to accept `_FillValue` data types not yet supported by Xarray and to make Xarray an optional dependency.
+
+The zarr `fill_value` in `ArrayV3Metadata` does **not** need this encoding — zarr handles its own serialization.
+
 ## Data model differences between Zarr and Xarray
 
 Whilst the [`ManifestStore`][virtualizarr.manifests.ManifestStore] class enforces nothing other than the minimum required to conform to the Zarr model, if you want to convert your [`ManifestStore`][virtualizarr.manifests.ManifestStore] to a virtual xarray dataset using [`ManifestStore.to_virtual_dataset`][virtualizarr.manifests.ManifestStore.to_virtual_dataset], there are a couple of additional requirements, set by Xarray's data model.

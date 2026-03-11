@@ -71,9 +71,9 @@ def _construct_manifest_array(
     # else:
     # dtype = dataset.dtype
 
+    # Encode _FillValue in the format xarray expects
     if "_FillValue" in attrs:
-        encoded_cf_fill_value = encode_cf_fill_value(attrs["_FillValue"], dtype)
-        attrs["_FillValue"] = encoded_cf_fill_value
+        attrs["_FillValue"] = encode_cf_fill_value(attrs["_FillValue"], dtype)
 
     codec_configs = [zarr_codec_config_to_v3(codec.get_config()) for codec in codecs]
 
