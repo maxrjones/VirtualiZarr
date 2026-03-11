@@ -77,13 +77,12 @@ def _construct_manifest_array(
 
     codec_configs = [zarr_codec_config_to_v3(codec.get_config()) for codec in codecs]
 
-    fill_value = dataset.fillvalue.item()
     dims = tuple(_dataset_dims(dataset, group=group))
     metadata = create_v3_array_metadata(
         shape=dataset.shape,
         data_type=dtype,
         chunk_shape=chunks,
-        fill_value=fill_value,
+        fill_value=dataset.fillvalue,  # zarr-python handles casting
         codecs=codec_configs,
         dimension_names=dims,
         attributes=attrs,
