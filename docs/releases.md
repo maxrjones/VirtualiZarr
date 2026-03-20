@@ -4,9 +4,15 @@
 
 ### New Features
 
+- Added `region` parameter to `to_icechunk()`.
+  ([#873](https://github.com/zarr-developers/VirtualiZarr/pull/873)).
+  By [Vladislav Wohlrath](https://github.com/vladidobro).
 - Support configurable chunk separator.
   ([#917](https://github.com/zarr-developers/VirtualiZarr/pull/917)).
   By [Max Jones](https://github.com/maxrjones).
+- Improved `ZarrParser` performance enormously by using obstore to list chunks in a directory instead of getting all their sizes individually.
+  ([#892](https://github.com/zarr-developers/VirtualiZarr/pull/892)).
+  By [Raphael Hagen](https://github.com/norlandrhagen).
 
 ### Breaking changes
 
@@ -34,23 +40,28 @@
 - Fix `ZarrParser` not using the store-relative path when the zarr store is nested inside the object store root
   ([#913](https://github.com/zarr-developers/VirtualiZarr/pull/913)).
   By [Tom Nicholas](https://github.com/TomNicholas).
+- Fix `ZarrParser` not correctly parsing scalar variables from v2 native zarr stores ([#936](https://github.com/zarr-developers/VirtualiZarr/pull/936)).
+  By [Julius Buseceke](https://github.com/jbusecke)
 
 ### Documentation
 
 ### Internal changes
 
+- Inlined `virtualizarr.writers.icechunk.generate_chunk_key` in `virtualizarr.writers.icechunk.write_manifest_virtual_refs`, and deleted the original function.
+  ([#873](https://github.com/zarr-developers/VirtualiZarr/pull/873)).
+  By [Vladislav Wohlrath](https://github.com/vladidobro).
 - Skip unnecessary re-validation of already-validated paths during manifest concatenation([#910](https://github.com/zarr-developers/VirtualiZarr/pull/910)).
   By [Tom Nicholas](https://github.com/TomNicholas).
+- Completely rewrote the `ZarrParser` to use numpy string arrays for efficiency ([#927](https://github.com/zarr-developers/VirtualiZarr/pull/927)).
+  By [Tom Nicholas](https://github.com/TomNicholas).
+- Testing across all supported python versions ([#927](https://github.com/zarr-developers/VirtualiZarr/pull/932)).
+  By [Julius Busecke](https://github.com/jbusecke)
 
 ## v2.4.0 (24th January 2026)
 
 This release moves the `ObjectStoreRegistry` to a separate package `obspec_utils`, and provides a way to customize how files are read, which can easily allow `open_virtual_dataset` to run over ~5x faster.
 
 ### New Features
-
-- Improved `ZarrParser` performance.
-  ([#892](https://github.com/zarr-developers/VirtualiZarr/pull/892)).
-  By [Raphael Hagen](https://github.com/norlandrhagen).
 
 - Added `reader_factory` parameter to `HDFParser` to allow customizing how files are read
   ([#844](https://github.com/zarr-developers/VirtualiZarr/pull/844)).
