@@ -167,6 +167,21 @@ class ManifestStore(Store):
         entry = manifest.get_entry(chunk_indexes)
         if entry is None:
             return None
+
+        # Native (in-memory) chunks: return the data directly
+        if "data" in entry:
+            native_data = entry["data"]
+            if byte_range is not None:
+                native_byte_range = _transform_byte_range(
+                    byte_range,
+                    chunk_start=0,
+                    chunk_end_exclusive=len(native_data),
+                )
+                native_data = native_data[
+                    native_byte_range.start : native_byte_range.end
+                ]
+            return prototype.buffer.from_bytes(native_data)
+
         path = entry["path"]
         offset = entry["offset"]
         length = entry["length"]

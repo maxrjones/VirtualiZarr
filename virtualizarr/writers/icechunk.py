@@ -568,21 +568,39 @@ def write_manifest_virtual_refs(
         # In practice this should only really come up in synthetic examples, e.g. tests and docs.
         last_updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
 
-    virtual_chunk_spec_list = [
-        VirtualChunkSpec(
-            index=[
-                index + offset for index, offset in zip(grid_index, chunk_index_offsets)
-            ],
-            location=entry["path"],
-            offset=entry["offset"],
-            length=entry["length"],
-            last_updated_at_checksum=last_updated_at,
-        )
-        for grid_index, entry in manifest.iter_refs()
-    ]
+    virtual_chunk_spec_list = []
+    native_chunks: list[tuple[str, bytes]] = []
 
-    store.set_virtual_refs(
-        array_path=key_prefix,
-        chunks=virtual_chunk_spec_list,
-        validate_containers=False,  # we already validated these before setting any refs
-    )
+    for grid_index, entry in manifest.iter_refs():
+        shifted_index = tuple(
+            index + offset for index, offset in zip(grid_index, chunk_index_offsets)
+        )
+        if "data" in entry:
+            chunk_key = "/".join(str(i) for i in shifted_index)
+            full_key = f"{key_prefix}/c/{chunk_key}"
+            native_chunks.append((full_key, entry["data"]))
+        else:
+            virtual_chunk_spec_list.append(
+                VirtualChunkSpec(
+                    index=list(shifted_index),
+                    location=entry["path"],
+                    offset=entry["offset"],
+                    length=entry["length"],
+                    last_updated_at_checksum=last_updated_at,
+                )
+            )
+
+    if virtual_chunk_spec_list:
+        store.set_virtual_refs(
+            array_path=key_prefix,
+            chunks=virtual_chunk_spec_list,
+            validate_containers=False,  # we already validated these before setting any refs
+        )
+
+    if native_chunks:
+        from zarr.core.buffer import default_buffer_prototype
+        from zarr.core.sync import sync as zarr_sync
+
+        for full_key, data in native_chunks:
+            buf = default_buffer_prototype().buffer.from_bytes(data)
+            zarr_sync(store.set(full_key, buf))

@@ -10,7 +10,7 @@ from collections.abc import (
     ValuesView,
 )
 from pathlib import PosixPath
-from typing import Any, NewType, TypedDict, cast
+from typing import Any, NewType, NotRequired, TypedDict, cast
 
 import numpy as np
 
@@ -39,10 +39,17 @@ class ChunkEntry(TypedDict):
     path: str
     offset: int
     length: int
+    data: NotRequired[bytes]
 
     @classmethod  # type: ignore[misc]
     def with_validation(
-        cls, *, path: str, offset: int, length: int, fs_root: str | None = None
+        cls,
+        *,
+        path: str,
+        offset: int,
+        length: int,
+        data: bytes | None = None,
+        fs_root: str | None = None,
     ) -> "ChunkEntry":
         """
         Constructor which validates each part of the chunk entry.
@@ -52,9 +59,13 @@ class ChunkEntry(TypedDict):
         fs_root
             The root of the filesystem on which these references were generated.
             Required if any (likely kerchunk-generated) paths are relative in order to turn them into absolute paths (which virtualizarr requires).
+        data
+            Raw bytes for native (in-memory) chunks. When present, path/offset/length are ignored.
         """
 
         # note: we can't just use `__init__` or a dataclass' `__post_init__` because we need `fs_root` to be an optional kwarg
+        if data is not None:
+            return ChunkEntry(path="", offset=0, length=len(data), data=data)
         if path != "":
             path = validate_and_normalize_path_to_uri(path, fs_root=fs_root)
         validate_byte_range(offset=offset, length=length)
@@ -190,6 +201,7 @@ class ChunkManifest:
     _paths: np.ndarray[Any, np.dtypes.StringDType]
     _offsets: np.ndarray[Any, np.dtype[np.uint64]]
     _lengths: np.ndarray[Any, np.dtype[np.uint64]]
+    _native: dict[tuple[int, ...], bytes]
 
     def __init__(
         self,
@@ -213,6 +225,11 @@ class ChunkManifest:
                 "0.1.1": {"path": "s3://bucket/foo.nc", "offset": 400, "length": 100},
             }
             ```
+
+            Entries may also include a ``data`` key with raw bytes for native (in-memory) chunks::
+
+                {"0.0": {"path": "", "offset": 0, "length": 4, "data": b"\\x00\\x01\\x02\\x03"}}
+
         separator
             The chunk key separator, as specified by the array's chunk_key_encoding
             metadata. Either "." (default/v2 encoding) or "/" (default encoding).
@@ -234,26 +251,38 @@ class ChunkManifest:
         offsets = np.empty(shape=shape, dtype=np.dtype("uint64"))
         lengths = np.empty(shape=shape, dtype=np.dtype("uint64"))
 
+        native: dict[tuple[int, ...], bytes] = {}
+
         # populate the arrays
         for key, entry in entries.items():
-            if not isinstance(entry, dict) or len(entry) != 3:
+            if not isinstance(entry, dict) or len(entry) not in (3, 4):
                 msg = (
-                    "Each chunk entry must be of the form dict(path=<str>, offset=<int>, length=<int>), "
+                    "Each chunk entry must be of the form dict(path=<str>, offset=<int>, length=<int>) "
+                    "or dict(path=<str>, offset=<int>, length=<int>, data=<bytes>), "
                     f"but got {entry}"
                 )
                 raise ValueError(msg)
 
-            path, offset, length = entry.values()
-            entry = ChunkEntry.with_validation(path=path, offset=offset, length=length)  # type: ignore[attr-defined]
-
             split_key = parse_manifest_index(key, separator)
-            paths[split_key] = entry["path"]
-            offsets[split_key] = entry["offset"]
-            lengths[split_key] = entry["length"]
+
+            if "data" in entry:
+                native[split_key] = entry["data"]
+                paths[split_key] = ""
+                offsets[split_key] = 0
+                lengths[split_key] = len(entry["data"])
+            else:
+                path, offset, length = entry.values()
+                entry = ChunkEntry.with_validation(
+                    path=path, offset=offset, length=length
+                )  # type: ignore[attr-defined]
+                paths[split_key] = entry["path"]
+                offsets[split_key] = entry["offset"]
+                lengths[split_key] = entry["length"]
 
         self._paths = paths
         self._offsets = offsets
         self._lengths = lengths
+        self._native = native
 
     @classmethod
     def from_arrays(
@@ -263,6 +292,7 @@ class ChunkManifest:
         offsets: np.ndarray[Any, np.dtype[np.uint64]],
         lengths: np.ndarray[Any, np.dtype[np.uint64]],
         validate_paths: bool = True,
+        native: dict[tuple[int, ...], bytes] | None = None,
     ) -> "ChunkManifest":
         """
         Create manifest directly from numpy arrays containing the path and byte range information.
@@ -281,6 +311,9 @@ class ChunkManifest:
         validate_paths
             Check that entries in the manifest are valid paths (e.g. that local paths are absolute not relative).
             Set to False to skip validation for performance reasons.
+        native
+            Dictionary mapping chunk grid indices to raw bytes for native (in-memory) chunks.
+            Paths at these indices should be empty strings.
         """
 
         # check types
@@ -330,6 +363,7 @@ class ChunkManifest:
         obj._paths = paths
         obj._offsets = offsets
         obj._lengths = lengths
+        obj._native = native if native is not None else {}
 
         return obj
 
@@ -352,6 +386,9 @@ class ChunkManifest:
         return self._paths.shape
 
     def __repr__(self) -> str:
+        n_native = len(self._native)
+        if n_native:
+            return f"ChunkManifest<shape={self.shape_chunk_grid}, native_chunks={n_native}>"
         return f"ChunkManifest<shape={self.shape_chunk_grid}>"
 
     @property
@@ -362,11 +399,22 @@ class ChunkManifest:
         Note this is not the size of the referenced chunks if they were actually loaded into memory,
         this is only the size of the pointers to the chunk locations.
         If you were to load the data into memory it would be ~1e6x larger for 1MB chunks.
+
+        For native chunks, includes the size of the actual chunk data stored in memory.
         """
-        return self._paths.nbytes + self._offsets.nbytes + self._lengths.nbytes
+        native_bytes = sum(len(v) for v in self._native.values())
+        return (
+            self._paths.nbytes
+            + self._offsets.nbytes
+            + self._lengths.nbytes
+            + native_bytes
+        )
 
     def __getitem__(self, key: ChunkKey) -> ChunkEntry:
         indices = parse_manifest_index(key)
+        if indices in self._native:
+            data = self._native[indices]
+            return ChunkEntry(path="", offset=0, length=len(data), data=data)
         path = self._paths[indices]
         offset = self._offsets[indices]
         length = self._lengths[indices]
@@ -405,23 +453,30 @@ class ChunkManifest:
         }
         ```
 
-        Entries whose path is an empty string will be interpreted as missing chunks and omitted from the dictionary.
+        Entries whose path is an empty string will be interpreted as missing chunks and omitted from the dictionary,
+        unless they are native chunks (which have their data stored in memory).
         """
         coord_vectors = np.mgrid[
             tuple(slice(None, length) for length in self.shape_chunk_grid)
         ]
 
-        # TODO consolidate each occurrence of this np.nditer pattern
-        d = {
-            join(inds): dict(
-                path=path.item(), offset=offset.item(), length=length.item()
-            )
-            for *inds, path, offset, length in np.nditer(
-                [*coord_vectors, self._paths, self._offsets, self._lengths],
-                flags=("refs_ok",),
-            )
-            if path.item() != ""  # don't include entry if path='' (i.e. empty chunk)
-        }
+        d = {}
+        for *inds, path, offset, length in np.nditer(
+            [*coord_vectors, self._paths, self._offsets, self._lengths],
+            flags=("refs_ok",),
+        ):
+            idx = tuple(int(i) for i in inds)
+            if idx in self._native:
+                d[join(inds)] = ChunkEntry(
+                    path="",
+                    offset=0,
+                    length=len(self._native[idx]),
+                    data=self._native[idx],
+                )
+            elif path.item() != "":
+                d[join(inds)] = dict(
+                    path=path.item(), offset=offset.item(), length=length.item()
+                )
 
         return cast(
             ChunkDict,
@@ -433,7 +488,8 @@ class ChunkManifest:
         paths_equal = (self._paths == other._paths).all()
         offsets_equal = (self._offsets == other._offsets).all()
         lengths_equal = (self._lengths == other._lengths).all()
-        return paths_equal and offsets_equal and lengths_equal
+        native_equal = self._native == other._native
+        return paths_equal and offsets_equal and lengths_equal and native_equal
 
     @classmethod
     def concat(cls, manifests: list["ChunkManifest"], axis: int) -> "ChunkManifest":
@@ -448,11 +504,22 @@ class ChunkManifest:
         concatenated_lengths = np.concatenate(
             [m._lengths for m in manifests], axis=axis
         )
+
+        concatenated_native: dict[tuple[int, ...], bytes] = {}
+        grid_offset = 0
+        for m in manifests:
+            for key, data in m._native.items():
+                shifted = list(key)
+                shifted[axis] += grid_offset
+                concatenated_native[tuple(shifted)] = data
+            grid_offset += m._paths.shape[axis]
+
         return cls.from_arrays(
             paths=concatenated_paths,
             offsets=concatenated_offsets,
             lengths=concatenated_lengths,
             validate_paths=False,
+            native=concatenated_native if concatenated_native else None,
         )
 
     @classmethod
@@ -464,11 +531,20 @@ class ChunkManifest:
         )
         stacked_offsets = np.stack([m._offsets for m in manifests], axis=axis)
         stacked_lengths = np.stack([m._lengths for m in manifests], axis=axis)
+
+        stacked_native: dict[tuple[int, ...], bytes] = {}
+        for i, m in enumerate(manifests):
+            for key, data in m._native.items():
+                shifted = list(key)
+                shifted.insert(axis, i)
+                stacked_native[tuple(shifted)] = data
+
         return cls.from_arrays(
             paths=stacked_paths,
             offsets=stacked_offsets,
             lengths=stacked_lengths,
             validate_paths=False,
+            native=stacked_native if stacked_native else None,
         )
 
     def broadcast(self, shape: tuple[int, ...]) -> "ChunkManifest":
@@ -479,15 +555,27 @@ class ChunkManifest:
         )
         broadcasted_offsets = np.broadcast_to(self._offsets, shape=shape)
         broadcasted_lengths = np.broadcast_to(self._lengths, shape=shape)
+
+        broadcasted_native: dict[tuple[int, ...], bytes] = {}
+        if self._native:
+            n_prepended = len(shape) - self._paths.ndim
+            for key, data in self._native.items():
+                new_key = (0,) * n_prepended + key
+                broadcasted_native[new_key] = data
+
         return self.from_arrays(
             paths=broadcasted_paths,
             offsets=broadcasted_offsets,
             lengths=broadcasted_lengths,
             validate_paths=False,
+            native=broadcasted_native if broadcasted_native else None,
         )
 
     def get_entry(self, indices: tuple[int, ...]) -> ChunkEntry | None:
         """Look up a chunk entry by grid indices. Returns None for missing chunks (empty path)."""
+        if indices in self._native:
+            data = self._native[indices]
+            return ChunkEntry(path="", offset=0, length=len(data), data=data)
         path = self._paths[indices]
         if path == "":
             return None
@@ -497,11 +585,16 @@ class ChunkManifest:
 
     def elementwise_eq(self, other: "ChunkManifest") -> np.ndarray:
         """Return boolean array where True means that chunk entry matches."""
-        return (
+        arrays_eq = (
             (self._paths == other._paths)
             & (self._offsets == other._offsets)
             & (self._lengths == other._lengths)
         )
+        if self._native or other._native:
+            # For indices with native data, compare the bytes directly
+            for idx in set(self._native) | set(other._native):
+                arrays_eq[idx] = self._native.get(idx) == other._native.get(idx)
+        return arrays_eq
 
     def iter_nonempty_paths(self) -> Iterator[str]:
         """Yield all non-empty paths in the manifest."""
@@ -510,7 +603,7 @@ class ChunkManifest:
                 yield path
 
     def iter_refs(self) -> Iterator[tuple[tuple[int, ...], ChunkEntry]]:
-        """Yield (grid_indices, chunk_entry) for every non-missing chunk."""
+        """Yield (grid_indices, chunk_entry) for every non-missing chunk, including native chunks."""
         coord_vectors = np.mgrid[
             tuple(slice(None, length) for length in self.shape_chunk_grid)
         ]
@@ -518,8 +611,14 @@ class ChunkManifest:
             [*coord_vectors, self._paths, self._offsets, self._lengths],
             flags=("refs_ok",),
         ):
-            if path.item() != "":
-                idx = tuple(int(i) for i in inds)
+            idx = tuple(int(i) for i in inds)
+            if idx in self._native:
+                data = self._native[idx]
+                yield (
+                    idx,
+                    ChunkEntry(path="", offset=0, length=len(data), data=data),
+                )
+            elif path.item() != "":
                 yield (
                     idx,
                     ChunkEntry(
@@ -579,6 +678,7 @@ class ChunkManifest:
             offsets=self._offsets,
             lengths=self._lengths,
             validate_paths=True,
+            native=dict(self._native),
         )
 
 
