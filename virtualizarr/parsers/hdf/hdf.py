@@ -77,7 +77,8 @@ def _construct_manifest_array(
 
     codec_configs = [zarr_codec_config_to_v3(codec.get_config()) for codec in codecs]
 
-    fill_value = dataset.fillvalue.item()
+    fv = dataset.fillvalue
+    fill_value = fv.item() if hasattr(fv, "item") else fv
     dims = tuple(_dataset_dims(dataset, group=group))
     metadata = create_v3_array_metadata(
         shape=dataset.shape,
