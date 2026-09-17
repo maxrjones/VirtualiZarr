@@ -1,3 +1,4 @@
+import io
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from zarr.errors import ContainsGroupError
 from virtualizarr import open_virtual_dataset
 from virtualizarr.manifests import ChunkManifest, ManifestArray
 from virtualizarr.parsers.zarr import ZarrParser
+from virtualizarr.tests import requires_minio
 from virtualizarr.tests.utils import PYTEST_TMP_DIRECTORY_URL_PREFIX
 
 icechunk = pytest.importorskip("icechunk")
@@ -598,7 +600,7 @@ def test_etag_checksum(
     # Only the non-matching case can be asserted against a local filesystem:
     # icechunk strips an etag's RFC 9110 quotes before comparing, but
     # object_store's local backend compares the raw quoted string, so no stored
-    # value can match. Icechunk's own tests cover the matching case against S3.
+    # value can match. test_etag_checksum_minio covers the matching case.
     vds.vz.to_icechunk(icechunk_filestore, last_updated_at="etag-that-cannot-match")
 
     root_group = zarr.group(store=icechunk_filestore)
@@ -606,6 +608,77 @@ def test_etag_checksum(
         pressure_array = root_group["pressure"]
         assert isinstance(pressure_array, zarr.Array)
         npt.assert_equal(pressure_array, arr)
+
+
+@requires_minio
+def test_etag_checksum_minio(
+    minio_bucket,
+    tmp_path: Path,
+    array_v3_metadata,
+):
+    """End-to-end If-Match over the S3 protocol, including the matching-etag
+    case that test_etag_checksum cannot cover on a local filesystem."""
+    from icechunk import IcechunkError
+
+    arr = np.arange(12, dtype=np.dtype("int32")).reshape(3, 4)
+    data = arr.tobytes()
+    etag = (
+        minio_bucket["client"]
+        .put_object(
+            minio_bucket["bucket"], "etag/chunk.bin", io.BytesIO(data), len(data)
+        )
+        .etag
+    )
+
+    url_prefix = f"s3://{minio_bucket['bucket']}/"
+    config = icechunk.RepositoryConfig.default()
+    config.set_virtual_chunk_container(
+        icechunk.VirtualChunkContainer(
+            url_prefix=url_prefix,
+            store=icechunk.s3_store(
+                region="us-east-1",
+                endpoint_url=minio_bucket["endpoint"],
+                allow_http=True,
+                s3_compatible=True,
+                force_path_style=True,
+            ),
+        )
+    )
+    repo = icechunk.Repository.create(
+        storage=icechunk.Storage.new_local_filesystem(str(tmp_path)),
+        config=config,
+        authorize_virtual_chunk_access={
+            url_prefix: icechunk.s3_credentials(
+                access_key_id=minio_bucket["username"],
+                secret_access_key=minio_bucket["password"],
+            )
+        },
+    )
+    store = repo.writable_session("main").store
+
+    manifest = ChunkManifest(
+        {
+            "0.0": {
+                "path": f"{url_prefix}etag/chunk.bin",
+                "offset": 0,
+                "length": len(data),
+            }
+        }
+    )
+    metadata = array_v3_metadata(shape=(3, 4), chunks=(3, 4), codecs=None)
+    ma = ManifestArray(chunkmanifest=manifest, metadata=metadata)
+    vds = xr.Dataset({"pressure": xr.Variable(data=ma, dims=["x", "y"])})
+
+    # A non-matching etag fails loudly at read time: MinIO answers the
+    # conditional GET with 412 Precondition Failed.
+    vds.vz.to_icechunk(store, last_updated_at="etag-that-cannot-match")
+    root_group = zarr.group(store=store)
+    with pytest.raises(IcechunkError):
+        npt.assert_equal(root_group["pressure"], arr)
+
+    # The object's real etag matches, so the read succeeds.
+    vds.vz.to_icechunk(store, mode="w", last_updated_at=etag)
+    npt.assert_equal(zarr.group(store=store)["pressure"], arr)
 
 
 def test_roundtrip_coords(
