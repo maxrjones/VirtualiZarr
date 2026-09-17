@@ -79,7 +79,7 @@ class _VirtualiZarrDatasetAccessor:
         append_dim: str | None = None,
         region: Literal["auto"] | Mapping[str, Literal["auto"] | slice] | None = None,
         validate_containers: bool = True,
-        last_updated_at: datetime | None = None,
+        last_updated_at: datetime | str | None = None,
     ) -> None:
         """
         Write an xarray dataset to an Icechunk store.
@@ -131,7 +131,10 @@ class _VirtualiZarrDatasetAccessor:
             confusing runtime results and errors when reading data back.
         last_updated_at
             Datetime to use as a checksum for any virtual chunks written to the store
-            with this operation. When not provided, the current time is used.
+            with this operation. When not provided, the current time is used.  May
+            instead be the ETag of the source object as a string, when all virtual
+            chunks refer to the same object; icechunk then checks at read time that
+            the object's ETag still matches.
 
         Raises
         ------
@@ -352,7 +355,7 @@ class _VirtualiZarrDataTreeAccessor:
         mode: Literal["w", "w-", "a"] | None = None,
         write_inherited_coords: bool = False,
         validate_containers: bool = True,
-        last_updated_at: datetime | None = None,
+        last_updated_at: datetime | str | None = None,
         **kwargs,
     ) -> None:
         """
@@ -394,7 +397,10 @@ class _VirtualiZarrDataTreeAccessor:
             confusing runtime results and errors when reading data back.
         last_updated_at
             Datetime to use as a checksum for any virtual chunks written to the store
-            with this operation.  When not provided, no check is performed.
+            with this operation.  When not provided, no check is performed.  May
+            instead be the ETag of the source object as a string, when all virtual
+            chunks refer to the same object; icechunk then checks at read time that
+            the object's ETag still matches.
         **kwargs
             Additional keyword arguments to be passed to ``xarray.Dataset.vz.to_icechunk``.
 

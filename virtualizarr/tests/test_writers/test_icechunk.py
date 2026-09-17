@@ -535,9 +535,9 @@ def test_checksum(
     # This represents someone coming back much later and overwriting archival data
     time.sleep(1)
 
-    # Fail if anything but None or a datetime is passed to last_updated_at
+    # Fail if anything but None, a datetime, or an ETag str is passed to last_updated_at
     with pytest.raises(TypeError):
-        vds.vz.to_icechunk(icechunk_filestore, last_updated_at="not a datetime")  # type: ignore
+        vds.vz.to_icechunk(icechunk_filestore, last_updated_at=123)  # type: ignore
 
     root_group = zarr.group(store=icechunk_filestore)
     pressure_array = root_group["pressure"]
@@ -562,6 +562,46 @@ def test_checksum(
 
     # Now if we try to read the data back in, it should fail because the checksum_date
     # is newer than the last_updated_at
+    with pytest.raises(IcechunkError):
+        pressure_array = root_group["pressure"]
+        assert isinstance(pressure_array, zarr.Array)
+        npt.assert_equal(pressure_array, arr)
+
+
+def test_etag_checksum(
+    icechunk_filestore: "IcechunkStore",
+    tmpdir: Path,
+    array_v3_metadata,
+):
+    from icechunk import IcechunkError
+
+    netcdf_path = tmpdir / "test.nc"
+    arr = np.arange(12, dtype=np.dtype("int32")).reshape(3, 4) * 2
+    var = xr.Variable(data=arr, dims=["x", "y"])
+    ds = xr.Dataset({"foo": var})
+    ds.to_netcdf(netcdf_path)
+
+    manifest = ChunkManifest(
+        {"0.0": {"path": str(netcdf_path), "offset": 6144, "length": 48}}
+    )
+    metadata = array_v3_metadata(
+        shape=(3, 4),
+        chunks=(3, 4),
+        codecs=None,
+    )
+    ma = ManifestArray(chunkmanifest=manifest, metadata=metadata)
+    vds = xr.Dataset({"pressure": xr.Variable(data=ma, dims=["x", "y"])})
+
+    # An etag that doesn't match the object must fail loudly at read time
+    # (If-Match), instead of serving bytes that may not match the manifest.
+    #
+    # Only the non-matching case can be asserted against a local filesystem:
+    # icechunk strips an etag's RFC 9110 quotes before comparing, but
+    # object_store's local backend compares the raw quoted string, so no stored
+    # value can match. Icechunk's own tests cover the matching case against S3.
+    vds.vz.to_icechunk(icechunk_filestore, last_updated_at="etag-that-cannot-match")
+
+    root_group = zarr.group(store=icechunk_filestore)
     with pytest.raises(IcechunkError):
         pressure_array = root_group["pressure"]
         assert isinstance(pressure_array, zarr.Array)

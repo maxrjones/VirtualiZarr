@@ -70,7 +70,7 @@ def virtual_dataset_to_icechunk(
     append_dim: Optional[str] = None,
     region: Optional[Literal["auto"] | Mapping[str, Literal["auto"] | slice]] = None,
     validate_containers: bool = True,
-    last_updated_at: Optional[datetime] = None,
+    last_updated_at: datetime | str | None = None,
 ) -> None:
     """
     Write an virtual xarray dataset to an Icechunk store.
@@ -117,6 +117,12 @@ def virtual_dataset_to_icechunk(
         chunk. When not specified, icechunk will not check for modifications to the
         virtual chunks at runtime.
 
+        Alternatively pass the ETag of the source object as a ``str``, when every
+        virtual chunk written in this session refers to the same object. Icechunk
+        then verifies at read time that the object's ETag still matches. Unlike a
+        timestamp this also catches modifications that preserve the modification
+        time, and it is checked atomically with each byte-range fetch.
+
     Raises
     ------
     ValueError
@@ -153,9 +159,9 @@ def virtual_dataset_to_icechunk(
             f" but got type {type(last_updated_at)}"
         )
 
-    if not isinstance(last_updated_at, (type(None), datetime)):
+    if not isinstance(last_updated_at, (type(None), datetime, str)):
         raise TypeError(
-            "last_updated_at: expected type Optional[datetime],"
+            "last_updated_at: expected a datetime, an ETag str, or None,"
             f" but got type {type(last_updated_at)}"
         )
 
@@ -193,7 +199,7 @@ def virtual_datatree_to_icechunk(
     mode: Optional[Literal["w", "w-", "a"]] = None,
     write_inherited_coords: bool = False,
     validate_containers: bool = True,
-    last_updated_at: datetime | None = None,
+    last_updated_at: datetime | str | None = None,
     **kwargs,
 ) -> None:
     """
@@ -231,6 +237,12 @@ def virtual_datatree_to_icechunk(
         time, icechunk will raise an error at runtime when trying to read the virtual
         chunk. When not specified, icechunk will not check for modifications to the
         virtual chunks at runtime.
+
+        Alternatively pass the ETag of the source object as a ``str``, when every
+        virtual chunk written in this session refers to the same object. Icechunk
+        then verifies at read time that the object's ETag still matches. Unlike a
+        timestamp this also catches modifications that preserve the modification
+        time, and it is checked atomically with each byte-range fetch.
     **kwargs
         Additional keyword arguments to be passed to ``xarray.Dataset.vz.to_icechunk``.
 
@@ -256,9 +268,9 @@ def virtual_datatree_to_icechunk(
         mode, append_dim=kwargs.get("append_dim"), region=kwargs.get("region")
     )
 
-    if not isinstance(last_updated_at, (type(None), datetime)):
+    if not isinstance(last_updated_at, (type(None), datetime, str)):
         raise TypeError(
-            "last_updated_at: expected type datetime,"
+            "last_updated_at: expected a datetime, an ETag str, or None,"
             f" but got type {type(last_updated_at)}"
         )
 
@@ -345,7 +357,7 @@ def write_virtual_dataset_to_icechunk_group(
     group: Group,
     append_dim: Optional[str] = None,
     region: Optional[Literal["auto"] | Mapping[str, Literal["auto"] | slice]] = None,
-    last_updated_at: Optional[datetime] = None,
+    last_updated_at: datetime | str | None = None,
 ) -> None:
     if region is not None:
         vds, region = validate_and_autodetect_region(group, vds, region)
@@ -497,7 +509,7 @@ def write_virtual_variable_to_icechunk(
     var: xr.Variable,
     append_dim: Optional[str] = None,
     region: Optional[Mapping[str, slice]] = None,
-    last_updated_at: Optional[datetime] = None,
+    last_updated_at: datetime | str | None = None,
 ) -> None:
     """Write a single virtual variable into an icechunk store"""
 
@@ -599,7 +611,7 @@ def write_manifest_to_icechunk(
     arr_name: str,
     manifest: ChunkManifest,
     chunk_index_offsets: tuple[int, ...],
-    last_updated_at: Optional[datetime] = None,
+    last_updated_at: datetime | str | None = None,
 ) -> None:
     """
     Write all the chunks (virtual and/or inlined) for one array manifest at once.
