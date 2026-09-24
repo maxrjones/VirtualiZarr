@@ -596,11 +596,6 @@ def test_etag_checksum(
 
     # An etag that doesn't match the object must fail loudly at read time
     # (If-Match), instead of serving bytes that may not match the manifest.
-    #
-    # Only the non-matching case can be asserted against a local filesystem:
-    # icechunk strips an etag's RFC 9110 quotes before comparing, but
-    # object_store's local backend compares the raw quoted string, so no stored
-    # value can match. test_etag_checksum_minio covers the matching case.
     vds.vz.to_icechunk(icechunk_filestore, last_updated_at="etag-that-cannot-match")
 
     root_group = zarr.group(store=icechunk_filestore)
@@ -608,6 +603,17 @@ def test_etag_checksum(
         pressure_array = root_group["pressure"]
         assert isinstance(pressure_array, zarr.Array)
         npt.assert_equal(pressure_array, arr)
+
+    # The object's real etag matches: icechunk compares the stored value
+    # with one layer of RFC 9110 quotes stripped, and object_store's local
+    # backend implements If-Match, so the matching case holds on a local
+    # filesystem too (verified on icechunk 2.0.3 and 2.1.1, with the etag
+    # quoted or not). test_etag_checksum_minio exercises the real S3
+    # protocol (412 Precondition Failed) end to end.
+    etag = obs.head(LocalStore(prefix=str(tmpdir)), "test.nc")["e_tag"]
+    assert etag
+    vds.vz.to_icechunk(icechunk_filestore, mode="w", last_updated_at=etag)
+    npt.assert_equal(zarr.group(store=icechunk_filestore)["pressure"], arr)
 
 
 @requires_minio
