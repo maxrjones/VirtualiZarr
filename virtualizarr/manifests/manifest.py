@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import (
     Callable,
     ItemsView,
@@ -209,6 +210,10 @@ class ChunkManifest:
     _offsets: np.ndarray[Any, np.dtype[np.uint64]]
     _lengths: np.ndarray[Any, np.dtype[np.uint64]]
     _inlined: dict[tuple[int, ...], bytes]
+    # Experimental, for the `switch` codec (zarr-specs#399): each chunk's case ID (0 for
+    # a missing chunk) and its parameters, packed little-endian. Both or neither.
+    _case_ids: np.ndarray[Any, np.dtype[np.uint64]] | None = None
+    _parameters: np.ndarray[Any, np.dtype[np.object_]] | None = None
 
     def __init__(
         self,
@@ -309,6 +314,8 @@ class ChunkManifest:
         lengths: np.ndarray[Any, np.dtype[np.uint64]],
         validate_paths: bool = True,
         inlined: dict[tuple[int, ...], bytes] | None = None,
+        case_ids: np.ndarray[Any, np.dtype[np.uint64]] | None = None,
+        parameters: np.ndarray[Any, np.dtype[np.object_]] | None = None,
     ) -> "ChunkManifest":
         """
         Create manifest directly from numpy arrays containing the path and byte range information.
@@ -330,6 +337,12 @@ class ChunkManifest:
         inlined
             Dictionary mapping chunk grid indices to raw bytes for inlined (in-memory) chunks.
             Paths at these indices should be ``INLINED_CHUNK_PATH``.
+        case_ids
+            Experimental. Each chunk's ``switch`` case ID, the case key read as a big-endian
+            ``uint64``, or 0 for a missing chunk. See ``virtualizarr.manifests.switch``.
+        parameters
+            Experimental, required with ``case_ids``. An object array of ``bytes``: each
+            chunk's ``switch`` parameters, packed as the chunk's case declares them.
         """
 
         # check types
@@ -392,6 +405,22 @@ class ChunkManifest:
                     )
                 )
 
+        if (case_ids is None) != (parameters is None):
+            raise ValueError("case_ids and parameters must be given together")
+        if case_ids is not None and parameters is not None:
+            if case_ids.dtype != np.dtype("uint64"):
+                raise ValueError(
+                    f"case_ids array must have 64-bit unsigned integer dtype, but got dtype {case_ids.dtype}"
+                )
+            if parameters.dtype != np.dtype(object):
+                raise ValueError(
+                    f"parameters array must be an object array of bytes, but got dtype {parameters.dtype}"
+                )
+            if case_ids.shape != shape or parameters.shape != shape:
+                raise ValueError(
+                    f"Shapes of the arrays must be consistent, but case_ids {case_ids.shape} and parameters {parameters.shape} do not match paths {shape}"
+                )
+
         if validate_paths:
             vectorized_validation_fn = np.vectorize(
                 validate_and_normalize_path_to_uri, otypes=[np.dtypes.StringDType()]
@@ -403,8 +432,22 @@ class ChunkManifest:
         obj._offsets = offsets
         obj._lengths = lengths
         obj._inlined = inlined if inlined is not None else {}
+        obj._case_ids = case_ids
+        obj._parameters = parameters
 
         return obj
+
+    @property
+    def has_case_ids(self) -> bool:
+        """Whether chunks carry ``switch`` case IDs, so each is served behind a header."""
+        return self._case_ids is not None
+
+    def _switch_columns(self, fn: Callable[[np.ndarray], np.ndarray]) -> dict[str, Any]:
+        """``case_ids`` and ``parameters`` for a ``from_arrays`` call, each passed through
+        the same grid operation ``fn`` as the paths, or nothing if there are none."""
+        if self._case_ids is None or self._parameters is None:
+            return {}
+        return {"case_ids": fn(self._case_ids), "parameters": fn(self._parameters)}
 
     @property
     def ndim_chunk_grid(self) -> int:
@@ -442,11 +485,20 @@ class ChunkManifest:
         For inlined chunks, includes the size of the actual chunk data stored in memory.
         """
         inlined_bytes = sum(len(v) for v in self._inlined.values())
+        switch_bytes = 0
+        if self._case_ids is not None and self._parameters is not None:
+            # the object array holds pointers; count the bytes objects too
+            switch_bytes = (
+                self._case_ids.nbytes
+                + self._parameters.nbytes
+                + sum(sys.getsizeof(p) for p in self._parameters.flat)
+            )
         return (
             self._paths.nbytes
             + self._offsets.nbytes
             + self._lengths.nbytes
             + inlined_bytes
+            + switch_bytes
         )
 
     def __getitem__(self, key: ChunkKey) -> ChunkEntry:
@@ -535,7 +587,23 @@ class ChunkManifest:
         offsets_equal = (self._offsets == other._offsets).all()
         lengths_equal = (self._lengths == other._lengths).all()
         inlined_equal = self._inlined == other._inlined
-        return paths_equal and offsets_equal and lengths_equal and inlined_equal
+        return (
+            paths_equal
+            and offsets_equal
+            and lengths_equal
+            and inlined_equal
+            and bool(self._switch_eq(other).all())
+        )
+
+    def _switch_eq(self, other: "ChunkManifest") -> np.ndarray:
+        """Chunk-wise equality of case IDs and parameters (True where neither has any)."""
+        if self._case_ids is None and other._case_ids is None:
+            return np.full(self.shape_chunk_grid, True)
+        if self._case_ids is None or other._case_ids is None:
+            return np.full(self.shape_chunk_grid, False)
+        return (self._case_ids == other._case_ids) & (
+            self._parameters == other._parameters
+        )
 
     def get_entry(self, indices: tuple[int, ...]) -> ChunkEntry | None:
         """Look up a chunk entry by grid indices. Returns None for missing chunks (empty path)."""
@@ -552,6 +620,7 @@ class ChunkManifest:
             (self._paths == other._paths)
             & (self._offsets == other._offsets)
             & (self._lengths == other._lengths)
+            & self._switch_eq(other)
         )
         # For inlined chunks, paths/offsets/lengths can agree while bytes differ.
         # Force False at any position where the two manifests disagree on inlined data.
@@ -641,6 +710,7 @@ class ChunkManifest:
             lengths=self._lengths,
             validate_paths=True,
             inlined=dict(self._inlined),
+            **self._switch_columns(lambda a: a),
         )
 
 

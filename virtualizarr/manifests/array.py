@@ -62,7 +62,10 @@ class ManifestArray:
             # try unpacking the dict
             _metadata = ArrayV3Metadata(**metadata)
 
-        if not isinstance(_metadata.chunk_grid, RegularChunkGridMetadata):
+        # a rectilinear grid comes only from concatenating with `switch` (experimental)
+        if not isinstance(_metadata.chunk_grid, RegularChunkGridMetadata) and (
+            type(_metadata.chunk_grid).__name__ != "RectilinearChunkGridMetadata"
+        ):
             raise NotImplementedError(
                 f"Only RegularChunkGrid is currently supported for chunk size, but got type {type(_metadata.chunk_grid)}"
             )
@@ -117,7 +120,14 @@ class ManifestArray:
         return int(np.prod(self.shape))
 
     def __repr__(self) -> str:
-        return f"ManifestArray<shape={self.shape}, dtype={self.dtype}, chunks={self.metadata.chunks}>"
+        grid = self.metadata.chunk_grid
+        # a rectilinear grid (from concatenating with switch) has no single chunk shape
+        chunks = (
+            self.metadata.chunks
+            if isinstance(grid, RegularChunkGridMetadata)
+            else getattr(grid, "chunk_shapes", None)
+        )
+        return f"ManifestArray<shape={self.shape}, dtype={self.dtype}, chunks={chunks}>"
 
     @property
     def nbytes_virtual(self) -> int:

@@ -1136,9 +1136,12 @@ def test_refuse_combine(array_v3_metadata):
     marr2 = ManifestArray(
         metadata=metadata_different_codecs, chunkmanifest=chunkmanifest2
     )
-    for func in [np.concatenate, np.stack]:
-        with pytest.raises(NotImplementedError, match="different codecs"):
-            func([marr1, marr2], axis=0)
+    # concatenate merges differing codecs into an experimental `switch` codec (see
+    # test_switch.py); stack still refuses
+    with pytest.raises(NotImplementedError, match="different codecs"):
+        np.stack([marr1, marr2], axis=0)
+    merged = np.concatenate([marr1, marr2], axis=0)
+    assert [c.to_dict()["name"] for c in merged.metadata.codecs] == ["switch"]
 
     metadata_wrong_dtype = array_v3_metadata(
         shape=shape, chunks=chunks, data_type=np.dtype("int64")

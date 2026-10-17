@@ -18,6 +18,7 @@ from zarr.dtype import parse_data_type
 
 from virtualizarr.manifests import ManifestArray
 from virtualizarr.manifests.manifest import join
+from virtualizarr.manifests.switch import refuse_case_ids
 from virtualizarr.manifests.utils import create_v3_array_metadata
 from virtualizarr.types.kerchunk import KerchunkArrRefs, KerchunkStoreRefs
 from virtualizarr.utils import convert_v3_to_v2_metadata
@@ -102,6 +103,7 @@ def dataset_to_kerchunk_refs(
     """
     if zarr_format not in (2, 3):
         raise ValueError(f"zarr_format must be 2 or 3, but got {zarr_format}")
+    refuse_case_ids([ds], "kerchunk")
 
     # xarray's .to_zarr() does this, so we need to do it for kerchunk too
     variables, attrs = encode_dataset_coordinates(ds)

@@ -210,6 +210,12 @@ def create_v3_array_metadata(
     )
 
 
+_RECTILINEAR_HINT = (
+    " Enabling zarr-python's experimental rectilinear chunk grids, with "
+    "zarr.config.set({'array.rectilinear_chunks': True}), lets them concatenate."
+)
+
+
 def check_same_dtypes(dtypes: list[np.dtype]) -> None:
     """Check all the dtypes are the same"""
 
@@ -305,6 +311,7 @@ def check_no_partial_chunks_on_concat_axis(
                 "Cannot concatenate arrays with partial chunks because only regular chunk grids are currently supported. "
                 f"Concat input {i} has array length {shape[axis]} along the concatenation axis which is not "
                 f"evenly divisible by chunk length {chunk_shape[axis]}."
+                + _RECTILINEAR_HINT
             )
 
 
@@ -391,7 +398,13 @@ def manifest_chunk_shape(
     if not isinstance(metadata, ArrayV3Metadata):
         # Zarr V2 has no sharding, so a chunk is the manifest's unit
         return tuple(metadata.chunks)
-    return tuple(cast("RegularChunkGridMetadata", metadata.chunk_grid).chunk_shape)
+    if not isinstance(metadata.chunk_grid, RegularChunkGridMetadata):
+        # shortcut: only concatenation and ManifestStore reads handle rectilinear grids
+        raise NotImplementedError(
+            "This operation is not supported yet for arrays with a rectilinear chunk "
+            "grid, which only concatenating arrays of different chunk shapes creates"
+        )
+    return tuple(metadata.chunk_grid.chunk_shape)
 
 
 def _realign_inner_chunk_shape(

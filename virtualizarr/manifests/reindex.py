@@ -101,6 +101,11 @@ def reindex_axis(
     from virtualizarr.manifests.array import ManifestArray
 
     manifest = marr.manifest
+    if manifest.has_case_ids:
+        # shortcut: missing slots would need case ID 0 and empty parameters filled in
+        raise NotImplementedError(
+            "Reindexing an array whose chunks carry switch case IDs is not supported yet"
+        )
     src_paths = manifest._paths
     src_offsets = manifest._offsets
     src_lengths = manifest._lengths

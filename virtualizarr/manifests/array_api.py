@@ -2,11 +2,14 @@ import itertools
 from typing import TYPE_CHECKING, Any, Callable, Union, cast
 
 import numpy as np
+import zarr
 
 from virtualizarr.utils import determine_chunk_grid_shape
 
+from . import switch
 from .manifest import MISSING_CHUNK_PATH, ChunkManifest
 from .utils import (
+    RegularChunkGridMetadata,
     check_combinable_zarr_arrays,
     check_no_partial_chunks_on_concat_axis,
     check_same_ndims,
@@ -127,9 +130,6 @@ def concatenate(
     elif not isinstance(axis, int):
         raise TypeError()
 
-    # ensure dtypes, shapes, codecs etc. are consistent
-    check_combinable_zarr_arrays(arrays)
-
     check_same_ndims([arr.ndim for arr in arrays])
 
     # Ensure we handle axis being passed as a negative integer
@@ -138,8 +138,15 @@ def concatenate(
         axis = axis % first_arr.ndim
 
     arr_shapes = [arr.shape for arr in arrays]
-    arr_chunks = [manifest_chunk_shape(arr.metadata) for arr in arrays]
     check_same_shapes_except_on_concat_axis(arr_shapes, axis)
+
+    if _needs_switch_path(arrays, axis):
+        # codecs or chunk shapes differ: one switch codec and/or a rectilinear grid
+        return switch.concatenate(arrays, axis)
+
+    # ensure dtypes, shapes, codecs etc. are consistent
+    check_combinable_zarr_arrays(arrays)
+    arr_chunks = [manifest_chunk_shape(arr.metadata) for arr in arrays]
     check_no_partial_chunks_on_concat_axis(arr_shapes, arr_chunks, axis)
 
     # find what new array shape must be
@@ -158,6 +165,27 @@ def concatenate(
     )
 
     return ManifestArray(chunkmanifest=concatenated_manifest, metadata=new_metadata)
+
+
+def _needs_switch_path(
+    arrays: list["ManifestArray"] | tuple["ManifestArray", ...], axis: int
+) -> bool:
+    """Whether the inputs need ``switch.concatenate``: their codecs differ, they already
+    carry case IDs, or (only with zarr's rectilinear chunks enabled) their chunk grids
+    do not concatenate into one regular grid. Otherwise the checks below apply."""
+    first = arrays[0].metadata
+    if any(
+        arr.manifest.has_case_ids
+        or not isinstance(arr.metadata.chunk_grid, RegularChunkGridMetadata)
+        or arr.metadata.codecs != first.codecs
+        for arr in arrays
+    ):
+        return True
+    chunks = [manifest_chunk_shape(arr.metadata) for arr in arrays]
+    regular = len(set(chunks)) == 1 and all(
+        arr.shape[axis] % chunks[0][axis] == 0 for arr in arrays[:-1]
+    )
+    return not regular and bool(zarr.config.get("array.rectilinear_chunks"))
 
 
 @implements(np.stack)
@@ -283,7 +311,25 @@ def _concat_manifests(manifests: list[ChunkManifest], axis: int) -> ChunkManifes
         lengths=concatenated_lengths,
         validate_paths=False,
         inlined=concatenated_inlined if concatenated_inlined else None,
+        **_joined_switch_columns(manifests, np.concatenate, axis),
     )
+
+
+def _joined_switch_columns(
+    manifests: list[ChunkManifest], join: Callable, axis: int
+) -> dict[str, Any]:
+    """The case IDs and parameters of manifests joined by ``np.concatenate`` or
+    ``np.stack``: all or none of them must carry case IDs."""
+    with_ids = [m.has_case_ids for m in manifests]
+    if not any(with_ids):
+        return {}
+    if not all(with_ids):
+        # concatenate gives every input a switch codec first; anything else is a bug
+        raise ValueError("Cannot join manifests where only some carry switch case IDs")
+    return {
+        "case_ids": join([m._case_ids for m in manifests], axis=axis),
+        "parameters": join([m._parameters for m in manifests], axis=axis),
+    }
 
 
 def _stack_manifests(manifests: list[ChunkManifest], axis: int) -> ChunkManifest:
@@ -309,6 +355,7 @@ def _stack_manifests(manifests: list[ChunkManifest], axis: int) -> ChunkManifest
         lengths=stacked_lengths,
         validate_paths=False,
         inlined=stacked_inlined if stacked_inlined else None,
+        **_joined_switch_columns(manifests, np.stack, axis),
     )
 
 
@@ -345,6 +392,7 @@ def _broadcast_manifest(
         lengths=broadcasted_lengths,
         validate_paths=False,
         inlined=broadcasted_inlined if broadcasted_inlined else None,
+        **manifest._switch_columns(lambda a: np.broadcast_to(a, shape=shape)),
     )
 
 

@@ -487,6 +487,9 @@ def _subset_manifest(
         lengths=new_lengths,
         inlined=new_inlined,
         validate_paths=False,
+        **manifest._switch_columns(
+            lambda a: np.asarray(a[chunk_grid_selectors], dtype=a.dtype)
+        ),
     )
 
 

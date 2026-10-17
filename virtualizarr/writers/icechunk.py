@@ -17,6 +17,7 @@ from zarr.core.sync import sync
 from virtualizarr.codecs import extract_codecs, get_codecs
 from virtualizarr.manifests import ChunkManifest, ManifestArray
 from virtualizarr.manifests.manifest import INLINED_CHUNK_PATH
+from virtualizarr.manifests.switch import refuse_case_ids
 from virtualizarr.manifests.utils import (
     check_compatible_encodings,
     check_same_chunk_shapes,
@@ -173,6 +174,7 @@ def virtual_dataset_to_icechunk(
 
     store_path = StorePath(store, path=group or "")
 
+    refuse_case_ids([vds], "Icechunk")
     if validate_containers:
         validate_virtual_chunk_containers(store.session.config, [vds])
 
@@ -286,6 +288,7 @@ def virtual_datatree_to_icechunk(
     ]
     virtual_datasets = [pair[1] for pair in paths_and_virtual_datasets]
 
+    refuse_case_ids(virtual_datasets, "Icechunk")
     if validate_containers:
         validate_virtual_chunk_containers(store.session.config, virtual_datasets)
 

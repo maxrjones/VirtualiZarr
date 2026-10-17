@@ -17,6 +17,7 @@ from zarr.abc.store import (
 from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 from zarr.core.common import BytesLike
 
+from virtualizarr.manifests import switch
 from virtualizarr.manifests.array import ManifestArray
 from virtualizarr.manifests.group import ManifestGroup
 from virtualizarr.manifests.utils import manifest_chunk_shape, parse_manifest_index
@@ -170,9 +171,16 @@ class ManifestStore(Store):
         )
         chunk_indexes = parse_manifest_index(key, separator, expand_pattern=True)
 
+        # a switch case ID and parameters become a header in front of the chunk's bytes
+        head = b""
+        if manifest._case_ids is not None and manifest._parameters is not None:
+            case_id = int(manifest._case_ids[chunk_indexes])
+            if case_id != switch.MISSING_CASE_ID:
+                head = switch.header(case_id, manifest._parameters[chunk_indexes])
+
         # Check for inlined (in-memory) chunks first
         if chunk_indexes in manifest._inlined:
-            inlined_data = manifest._inlined[chunk_indexes]
+            inlined_data = head + manifest._inlined[chunk_indexes]
             if byte_range is not None:
                 inlined_byte_range = _transform_byte_range(
                     byte_range,
@@ -205,18 +213,22 @@ class ManifestStore(Store):
         else:
             prefix = ""
         path_in_store = path_in_store.lstrip("/").removeprefix(prefix).lstrip("/")
-        # Transform the input byte range to account for the chunk location in the file
-        chunk_end_exclusive = offset + length
-        byte_range = _transform_byte_range(
-            byte_range, chunk_start=offset, chunk_end_exclusive=chunk_end_exclusive
+
+        # The requested range of the chunk as served, header included...
+        served = _transform_byte_range(
+            byte_range, chunk_start=0, chunk_end_exclusive=len(head) + int(length)
         )
+        # ...is the part of the header it covers, then the part of the file after it
+        head_part = head[served.start : served.end]
+        start = int(offset) + max(served.start - len(head), 0)
+        end = int(offset) + max(served.end - len(head), 0)
+        if end <= start:
+            return prototype.buffer.from_bytes(head_part)
 
         # Actually get the bytes
-        bytes = await store.get_range_async(
-            path_in_store,
-            start=byte_range.start,
-            end=byte_range.end,
-        )
+        bytes = await store.get_range_async(path_in_store, start=start, end=end)
+        if head_part:
+            return prototype.buffer.from_bytes(head_part + memoryview(bytes).tobytes())
         return prototype.buffer.from_bytes(bytes)  # type: ignore[arg-type]
 
     async def get_partial_values(
