@@ -104,7 +104,7 @@ gh extension install github/gh-actions-lock
 gh actions-lock
 ```
 
-Changes to the workflows are also checked by [zizmor](https://docs.zizmor.sh/).
+Changes to the workflows and to `.github/dependabot.yml` are also checked by [zizmor](https://docs.zizmor.sh/).
 
 #### Private functions
 

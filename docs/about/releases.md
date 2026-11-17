@@ -37,8 +37,8 @@
 - The actions used by the GitHub Actions workflows, and the actions those use, are now pinned to commits in a
   [workflow lockfile](https://docs.github.com/actions/concepts/security/workflow-dependency-lockfiles)
   (`.github/workflows/actions.lock`), and Dependabot is configured to keep them current. A new workflow runs
-  [zizmor](https://docs.zizmor.sh/) on changes to the workflows, and the existing workflows now use a read-only token
-  and no longer leave checkout credentials on disk.
+  [zizmor](https://docs.zizmor.sh/) on changes to the workflows and the Dependabot config, the test workflows now use
+  a read-only token by default, and no workflow leaves checkout credentials on disk.
   By [Max Jones](https://github.com/maxrjones).
 
 ## v2.8.0 (14th October 2026)
